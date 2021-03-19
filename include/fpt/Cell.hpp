@@ -6,6 +6,7 @@
 #include <iostream>
 #include <numeric>
 #include <vector>
+#include <stdint.h>
 
 #define ATOMS_PER_CELL 32
 
@@ -17,7 +18,6 @@ namespace fpt {
         uint32_t n[ATOMS_PER_CELL];
         double  en[ATOMS_PER_CELL];
     };
-
 
     /** Transpose of a cell -- holding max.
         number of atoms per cell.
@@ -107,7 +107,8 @@ namespace fpt {
         CellSorter(float Lx, float Ly, float Lz, int nx, int ny, int nz, float Lyx=0.0, float Lzx=0.0, float Lzy=0.0)
             : L{Lx, Ly, Lz, Lyx,Lzx,Lzy}, n{nx, ny, nz}, cells(nx*ny*nz) { }
 
-        CellSorter_d device() { // return device-accessible copy of this class
+        ///! Return device-accessible copy of this class.
+        CellSorter_d device() const {
             return CellSorter_d(L[0], L[1], L[2], n[0], n[1], n[2]);
         }
 
@@ -163,4 +164,22 @@ namespace fpt {
         }
     };
 
+    /** Load atom information from cell index `far' into
+        the buffers n, x, y, z
+     */
+    ALPAKA_NO_HOST_ACC_WARNING
+    template<typename TAcc>
+    ALPAKA_FN_ACC inline int load_cell(TAcc const& acc,
+                    const Cell *X, const unsigned int fbin,
+                    CellTranspose &far) {
+        auto const bin(alpaka::getIdx<alpaka::Grid, alpaka::Blocks>(acc)[0u]); // blockIdx.x
+        auto const idx(alpaka::getIdx<alpaka::Block, alpaka::Threads>(acc)[0u]); // threadIdx.x
+
+        const Cell &A = X[fbin];
+        far.n[idx] = A.n[idx];
+        far.x[idx] = A.x[idx];
+        far.y[idx] = A.y[idx];
+        far.z[idx] = A.z[idx];
+        return fbin == bin;
+    }
 }
