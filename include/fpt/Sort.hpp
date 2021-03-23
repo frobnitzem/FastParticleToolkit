@@ -21,33 +21,42 @@ public:
     template<typename TAcc>
     ALPAKA_FN_ACC void operator()(
             TAcc const& acc,
-            Cell *X, Cell *Y
-            //const Cell *__restrict__ X,
-            //Cell *__restrict__ Y
+            const Cell *__restrict__ X,
+            Cell *__restrict__ Y
             ) const {
         using Idx = typename Vec::Val;
         using Dim = typename Vec::Dim;
         Idx const bin(alpaka::getIdx<alpaka::Grid, alpaka::Blocks>(acc)[0u]); // blockIdx.x
         Idx const idx(alpaka::getIdx<alpaka::Block, alpaka::Threads>(acc)[0u]); // threadIdx.x
+        Idx const natoms(alpaka::getWorkDiv<alpaka::Block, alpaka::Threads>(acc)[0u]);
 
-        auto& far = alpaka::declareSharedVar<CellTranspose, __COUNTER__>(acc);
-        load_cell(acc,X,bin,far);
-        alpaka::syncBlockThreads(acc);
+        //auto& far = alpaka::declareSharedVar<CellTranspose, __COUNTER__>(acc);
+        //load_cell(acc,X,bin,far);
+        //alpaka::syncBlockThreads(acc);
 
-        /*uint32_t n = X[bin].n[idx];
+        uint32_t n = X[bin].n[idx];
         float x = X[bin].x[idx];
         float y = X[bin].y[idx];
         float z = X[bin].z[idx];
-        const unsigned int to_bin = srt.calcBinF(x, y, z);
+        const uint32_t to_bin = srt.calcBinF(x, y, z);
+        
+        uint64_t mask = alpaka::warp::ballot(acc, n != 0);
+        for(Idx j = 0; j < natoms; j++) { // group-insert at each idx
+            if(((1<<j)&mask) == 0) continue; // no work
 
-        if(n != 0) {
-            const unsigned lane = srt.addToBin(Y, to_bin); // successful lane
-            Y[to_bin].x[lane] = x;
-            Y[to_bin].y[lane] = y;
-            Y[to_bin].z[lane] = z;
-        }*/
+            const int lane = srt.addToBin(acc, Y, j, n, to_bin); // successful lane
+            if(lane < 0) { // error - dropped particle.
+                continue;
+            }
+            if(j == idx) {
+                Y[to_bin].x[lane] = x;
+                Y[to_bin].y[lane] = y;
+                Y[to_bin].z[lane] = z;
+            }
+        }
     }
 };
+
 
 /* Return a sorting kernel */
 template<typename Acc, typename Dim, typename Idx, typename Dev>
@@ -71,8 +80,10 @@ auto mkSorter(const Dev &devAcc,
                 blockThreadExtent,
                 Vec::all(1)};
 
+    std::cout << "Creating sorting kernel for " << srt.cells << " cells.\n";
+
     // Create the kernel execution task.
-    fpt::sortAtomsKernel<Vec> K{srt};
+    sortAtomsKernel<Vec> K{srt};
     return alpaka::createTaskKernel<Acc>(workDiv, K,
                 alpaka::getPtrNative(X), alpaka::getPtrNative(Y));
 }

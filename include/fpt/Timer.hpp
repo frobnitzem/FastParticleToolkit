@@ -27,7 +27,7 @@ struct Timed {
 };
 
 template <typename Q, typename F>
-void time_kernel(Q queue, const std::string &name, F fn, int calls=100) {
+void time_kernel(Q queue, const std::string &name, F fn, int calls=1000) {
     std::cout << name << " (" << calls << " runs)" << std::endl;
 
     { alpaka::wait(queue);

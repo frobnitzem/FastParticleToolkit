@@ -27,6 +27,7 @@ void print_cells(const Cell *aosoa, const unsigned int cells) {
     unsigned int N = 0;
     double sum[3] = {0., 0., 0.};
 
+    std::cout << cells << " cells:\n";
     for(int i = 0; i < cells; i++) {
         if(N < 20 && i < 50)
             std::cout << "Bin " << i << std::endl;

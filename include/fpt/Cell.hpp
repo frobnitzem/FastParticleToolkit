@@ -60,38 +60,54 @@ namespace fpt {
         }
 
         ALPAKA_FN_HOST_ACC inline
-            unsigned int calcBin(const int i, const int j, const int k) const { 
+            uint32_t calcBin(const int i, const int j, const int k) const { 
                 return (k*n[1] + j)*n[0] + i;
         }
 
         ALPAKA_FN_HOST_ACC inline
-            unsigned int calcBinF(const float x, const float y, const float z) const { 
+            uint32_t calcBinF(const float x, const float y, const float z) const { 
                 return calcBin(x/h[0], y/h[1], z/h[2]);
         }
 
-        /* Returns the new atom count within the bin. */
+        /** Find idx such that Y[bin].n[idx] == 0
+         *  and set Y[bin].n[idx] = ntype
+         *
+         * returns idx, the index of the newly
+         * added atom within the cell.
+         *
+         * Must be called simultaneously by all threads in a warp.
+         * The values of ntype and bin only matter on thread = srcThread.
+         */
         ALPAKA_NO_HOST_ACC_WARNING
-        template<typename TAcc>
-        ALPAKA_FN_ACC inline unsigned addToBin(
-                TAcc const &acc, Cell *aosoa,
-                const unsigned int bin) const {
-            uint32_t cont = 1;
-            unsigned winner;
-            Cell &cell = aosoa[bin];
+        template<typename TAcc, typename Idx>
+        ALPAKA_FN_ACC inline int addToBin(
+                TAcc const &acc, Cell *Y,
+                const Idx srcThread,
+                uint32_t ntype,
+                uint32_t bin) const {
+            auto const idx(alpaka::getIdx<alpaka::Block, alpaka::Threads>(acc)[0u]); // threadIdx.x
+            uint64_t active = alpaka::warp::activemask(acc);
 
+            bin = alpaka::warp::shfl(acc, int32_t(bin), srcThread);
+            ntype = alpaka::warp::shfl(acc, int32_t(ntype), srcThread);
+
+            Cell &cell = Y[bin];
+
+            int winner;
+            int32_t cont = 1;
             while(cont) {
-                uint32_t n = cell.n[threadIdx.x];
+                uint32_t n = cell.n[idx];
                 auto mask = alpaka::warp::ballot(acc, n != 0);
 
-                if(mask == alpaka::warp::activemask(acc)) { // no open slots
+                if(mask == active) { // no open slots
                     // FIXME: allocate continuation
-                    return alpaka::warp::getSize(acc)-1;
+                    return -1;
                 }
                 for(winner=0; (1<<winner) & mask; winner++); // find winning thread (first 0)
-            
-                if(threadIdx.x == winner) {
+
+                if(idx == winner) {
                     cont = alpaka::atomicOp<alpaka::AtomicCas>(acc,
-                                  &cell.n[threadIdx.x], 0, 1);
+                                  &cell.n[idx], uint32_t(0), ntype);
                 }
                 cont = alpaka::warp::shfl(acc, cont, winner);
             }
