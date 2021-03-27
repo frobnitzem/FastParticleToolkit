@@ -52,13 +52,16 @@ void print_cells(const Cell *aosoa, const unsigned int cells) {
 
 template <typename Acc>
 void print_Ecells(const Acc &devAcc,
-                  const alpaka::Buf<Acc, CellEnergy, alpaka::DimInt<1u>, uint32_t> &aosoa,
-                  const unsigned int cells) {
+                  const alpaka::Buf<Acc, CellEnergy, alpaka::DimInt<1u>, uint32_t> &aosoa) {
+    auto const cells = alpaka::extent::getExtent<0>(aosoa);
+    const auto devHost = alpaka::getDevByIdx<alpaka::DevCpu>(0u);
+
     //thrust::host_vector<CellEnergy> aosoa(en);
     alpaka::Buf<alpaka::DevCpu, CellEnergy, alpaka::DimInt<1u>, uint32_t>
-        bhost{alpaka::allocBuf<CellEnergy, uint32_t>(devAcc, cells)};
+        bhost{alpaka::allocBuf<CellEnergy, uint32_t>(devHost, cells)};
     auto queue = alpaka::Queue<Acc, alpaka::Blocking>(devAcc);
     alpaka::memcpy(queue, bhost, aosoa, cells);
+    alpaka::wait(queue);
     CellEnergy* host = alpaka::getPtrNative( bhost );
 
     unsigned int N = 0;

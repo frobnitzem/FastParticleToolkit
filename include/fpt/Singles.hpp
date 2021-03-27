@@ -11,7 +11,7 @@ struct Oper1Kernel {
     ALPAKA_FN_ACC void operator()(
                 TAcc const& acc,
                 const Cell *__restrict__ X,
-                typename Oper1::Output *__restrict__ out
+                typename Oper1::Output *__restrict__ const out
                 ) const {
         const int idx = alpaka::getIdx<alpaka::Block, alpaka::Threads>(acc)[0];
         auto cell = alpaka::getIdx<alpaka::Grid, alpaka::Blocks>(acc)[0];
