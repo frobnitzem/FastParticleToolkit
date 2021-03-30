@@ -1,3 +1,5 @@
+#pragma once
+
 #include <fpt/Cell.hpp>
 
 namespace fpt {
@@ -14,7 +16,7 @@ struct Oper1Kernel {
                 typename Oper1::Output *__restrict__ const out
                 ) const {
         const int idx = alpaka::getIdx<alpaka::Block, alpaka::Threads>(acc)[0];
-        auto cell = alpaka::getIdx<alpaka::Grid, alpaka::Blocks>(acc)[0];
+        const auto cell = alpaka::getIdx<alpaka::Grid, alpaka::Blocks>(acc)[0];
 
         const Cell &A = X[cell];
         uint32_t n = A.n[idx];
