@@ -109,7 +109,7 @@ namespace fpt {
     };
 
     //#############################################################################
-    //! A vector addition kernel.
+    //! Kernel clearing the allocation space on the device
     struct ClearAllocKernel {
         using Dim = alpaka::DimInt<1u>;
         using Vec = alpaka::Vec<Dim,uint32_t>;
@@ -123,42 +123,47 @@ namespace fpt {
                 ) const {
             const auto idx = alpaka::getIdx<alpaka::Grid, alpaka::Threads>(acc)[0];
             uint32_t ans = 0;
-            // N/32, N%32 is the bit-number at which we start placing 1-s
-            if(idx >= N/32) {
+            // N/32, N%32 is the bit-number at which we start placing 0-s
+            if(idx <= N/32) {
                 if(idx == N/32) {
                     ans = (1<<(N%32)) - 1;
                 } else {
-                    ans = 0;
+                    ans = 0xFFFFFFFF;
                 }
             }
-            frl[idx] = 0xFFFFFFFF;
+            frl[idx] = ans;
         }
     };
 
     /**  Allocate up to N members of type A on Dev.
      */
-    template <typename A, typename Dev>
+    template <typename A, typename Acc>
     class Alloc {
     private:
+        using Dev = alpaka::Dev<Acc>;
         using Dim = alpaka::DimInt<1u>;
+        using Idx = uint32_t; // not modifiable
         using Vec = alpaka::Vec<Dim,uint32_t>;
-        using BufDev = alpaka::Buf<Dev, A, Dim, uint32_t>;
-        using FreeDev = alpaka::Buf<Dev, uint32_t, Dim, uint32_t>;
+        using Device = Dev;
+        using FreeDev = alpaka::Buf<Dev, uint32_t, Dim, Idx>;
+        using BufDev = alpaka::Buf<Dev, A, Dim, Idx>;
 
         const uint32_t N; // N = #arr
         const uint32_t warp; // number of threads in a warp
         const uint32_t M; // M = #blocks
+        const Dev &devAcc;
         FreeDev frl; // free list, size = M*warp
         BufDev arr; // allocatable array blocks
 
     public:
-        Alloc(const Dev &devAcc, const uint16_t N_)
+        Alloc(const Dev &devAcc_, const uint32_t N_)
             : N(N_)
-            , warp( alpaka::getWarpSize(devAcc) )
+            , warp( alpaka::getWarpSize(devAcc_) )
             , M((N+32*warp-1)/(32*warp))
-            , frl( BufDev{alpaka::allocBuf<uint32_t, uint32_t>(
-                                    devAcc, M * warp)} )
-            , arr( BufDev{alpaka::allocBuf<A, uint32_t>(devAcc, N)} ) {
+            , devAcc(devAcc_)
+            , frl( FreeDev{alpaka::allocBuf<uint32_t, Idx>(
+                                    devAcc_, M * warp)} )
+            , arr( BufDev{alpaka::allocBuf<A, Idx>(devAcc_, N)} ) {
         // FIXME: kernel call to inialize frl (all 0, except last few
         // cells when 32*warp doesn't divide N = 1)
         }
@@ -170,9 +175,14 @@ namespace fpt {
                                 alpaka::getPtrNative(arr) );
         }
 
+        template <typename Queue>
+        void reinit(Queue &Q) {
+            auto K = initKernel();
+            alpaka::enqueue(Q, K);
+        }
+
         // Kernel launch to (re)initialize free-list.
-        template<typename Acc>
-        auto initKernel(const Dev &devAcc) {
+        auto initKernel() {
             // Launch with one warp per thread block:
             auto const gridBlockExtent = Vec::all(M);
             auto blockThreadExtent = Vec::all( alpaka::getWarpSize(devAcc) );

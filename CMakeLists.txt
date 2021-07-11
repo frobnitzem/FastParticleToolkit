@@ -7,7 +7,7 @@ set(CMAKE_MODULE_PATH
     "${CMAKE_CURRENT_LIST_DIR}/lib/Catch2/extras")
 
 option(BUILD_TESTS "Build the tests accompanying this library." ON)
-option(BUILD_DOCS "Build the documentation accompanying this library." OFF)
+option(BUILD_DOCS "Build the documentation accompanying this library." ON)
 
 #--------------------------------------
 # External Packages
