@@ -48,6 +48,6 @@ The hash output space is 2^16.  This limits the maximum addressable space to N <
 These addresses belong to just one MPI rank, so more space is not needed for this application.
 
 
-.. doxygenclass:: fpt::Allocator
+.. doxygenclass:: fpt::Alloc
    :members:
 

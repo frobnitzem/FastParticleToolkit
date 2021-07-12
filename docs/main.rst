@@ -1,44 +1,39 @@
-libdwork - The Library
-######################
+How to Write a Main Function
+############################
 
-Workers can be implemented in lots of different ways.
-You might want to build your own client
-to interact with `dhub`.
+The example directory contains a simple
+Lennard Jones simulation.  You can see that
+its main function does the following tasks::
 
-You can do this on your own following the documented
-message API based on ZeroMQ and protocol buffers.
-*Or*, you can write a C++ program that uses our
-convenient wrapper classes and functions.
+    // Declare an Accelerator & Queue
+    auto const devAcc = alpaka::getDevByIdx<Acc>(0u);
+    auto queue = alpaka::Queue<Acc, alpaka::NonBlocking>(devAcc);
 
-
-An example of using the protobuf interface is below::
-
-    int send_task(zmq::socket_t &hub) {
-        dwork::QueryMsg query;
-        query.set_type(dwork::QueryMsg::Create);
-        dwork::TaskMsg *task = new_task(query, "cook dinner");
-
-        dwork::TaskMsg::Dep *dep1 = task->add_pred();
-        dep1->set_name("chop onions");
-        dwork::TaskMsg::Dep *dep2 = task->add_pred();
-        dep2->set_name("gather spices");
-
-        sendProto(hub, query);
-        auto resp = recvProto<dwork::QueryMsg>(hub);
-        return !(resp.has_value() && resp.value().type() == dwork::QueryMsg::OK);
+    // Initialize Buffers
+    auto xHost         = alloc<fpt::Cell, Dim, Idx>(devHost, srt.cells);
+    fpt::Cell* pHost   = alpaka::getPtrNative( xHost );
+    for(int i = 0; i < N; i++) {
+        pHost[i/ATOMS_PER_CELL].n[i%ATOMS_PER_CELL] = 1;
     }
 
-Documentation on the methods available to manipulate the dwork::TaskMsg
-and dwork::QueryMsg classes are available here:
-https://developers.google.com/protocol-buffers/docs/reference/cpp-generated
+    // Copy to Device
+    auto xCurrAcc = alloc<fpt::Cell, Dim, Idx>(devAcc, srt.cells);
+    alpaka::memcpy(queue, xCurrAcc, xHost, srt.cells);
 
-Our send/receive wrappers are in `proto.hh`:
+    // Declare Kernels
+    auto const LJDEK = fpt::mk2Body<LJDerivOper,Acc,Dim,Idx>(
+                             devAcc, srt, nbr1, xNextAcc, xCurrAcc);
 
-.. doxygenfile:: proto.hh
+    // Execute Kernels
+    alpaka::enqueue(queue, LJDEK);
 
-.. doxygenclass:: dwork::TaskDB
-   :members:
+    // Copy back results
+    alpaka::memcpy(queue, xHost, xCurrAcc, srt.cells);
 
-.. doxygenclass:: dwork::TaskHeap
-   :members:
+..
+    .. doxygenfile:: proto.hh
+    .. doxygenclass:: dwork::TaskDB
+       :members:
+    .. doxygenclass:: dwork::TaskHeap
+       :members:
 

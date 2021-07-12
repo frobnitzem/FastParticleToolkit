@@ -20,26 +20,55 @@ namespace fpt {
      */
     template <typename A, typename Dev>
     class Alloc_d {
-    private:
+      public:
         using Dim = alpaka::DimInt<1u>;
         using BufDev = alpaka::Buf<Dev, A, Dim, uint32_t>;
         using FreeDev = alpaka::Buf<Dev, uint32_t, Dim, uint32_t>;
 
         const uint32_t N, M; // N = #arr, M = #blocks
         const uint32_t warp; // number of threads in a warp
+
+      private:
         uint32_t *frl; // free list, size = M*warp
+      public:
         A *arr; // allocatable array blocks
 
-    public:
         Alloc_d(const uint32_t N_, const uint32_t M_, const uint32_t warp_,
                     uint32_t *frl_, A *arr_)
                         : N(N_), M(M_), warp(warp_), frl(frl_), arr(arr_) {}
+
+        ALPAKA_FN_ACC bool is_free(uint32_t start) {
+            return frl[start/32] & (start % 32) != 0;
+        }
+
+        // Every thread receives the same free count.
+        template <typename Acc>
+        ALPAKA_FN_ACC uint32_t count_free(Acc const& acc) {
+            const auto blk = alpaka::getIdx<alpaka::Block, alpaka::Threads>(acc)[0];
+            const auto warpSize = alpaka::getWorkDiv<alpaka::Block, alpaka::Threads>(acc)[0];
+            uint32_t nfree = 0;
+
+            for(uint32_t k=blk; k<M; k += warpSize) {
+                uint32_t x = frl[k];
+                for(int i=0; i<32; i++) {
+                    nfree += (x>>i)&1;
+                }
+            }
+            uint32_t tfree = 0;
+            for(int i=0; i<warpSize; i++) {
+                tfree += alpaka::warp::shfl(acc, nfree, i);
+            }
+            return tfree;
+        }
 
         // Device-accessible function to allocate.
         // Searches for blocks starting with searchNext(`start`,blk,N)
         //
         // The entire point of this routine is to find any bit set to 1
-        // in the frl.  Setting it to 0 will indicate it's claimed.
+        // in the frl.  Then atomically set it to 0 to indicate it's claimed.
+        //
+        // Must be called by all threads in a warp simultaneously.
+        // All threads will receive the same result.
         template <typename Acc>
         ALPAKA_FN_ACC uint32_t alloc(Acc const& acc, uint32_t start) {
             const auto idx = alpaka::getIdx<alpaka::Block, alpaka::Threads>(acc)[0];
@@ -84,6 +113,8 @@ namespace fpt {
                         return m*32 + (k0+b)%32; // 32*m+k
                 }
             }
+            // FIXME: handle OOM condition
+            return 0;
         }
 
         // Device-accessible function to de-allocate.
@@ -110,6 +141,7 @@ namespace fpt {
 
     //#############################################################################
     //! Kernel clearing the allocation space on the device
+    //! and setting first N0 elems to "used" state.
     struct ClearAllocKernel {
         using Dim = alpaka::DimInt<1u>;
         using Vec = alpaka::Vec<Dim,uint32_t>;
@@ -118,6 +150,7 @@ namespace fpt {
         template<typename TAcc>
         ALPAKA_FN_ACC void operator()(
                 TAcc const& acc,
+                const uint32_t N0,
                 const uint32_t N,
                 uint32_t *frl
                 ) const {
@@ -126,10 +159,14 @@ namespace fpt {
             // N/32, N%32 is the bit-number at which we start placing 0-s
             if(idx <= N/32) {
                 if(idx == N/32) {
-                    ans = (1<<(N%32)) - 1;
+                    ans |= (1<<(N%32)) - 1;
                 } else {
                     ans = 0xFFFFFFFF;
                 }
+                if(idx < N0) // initial used space
+                    ans = 0;
+                if(idx == N0/32)
+                    ans &= ~( (1<<(N0%32)) - 1 );
             }
             frl[idx] = ans;
         }
@@ -139,7 +176,7 @@ namespace fpt {
      */
     template <typename A, typename Acc>
     class Alloc {
-    private:
+    public:
         using Dev = alpaka::Dev<Acc>;
         using Dim = alpaka::DimInt<1u>;
         using Idx = uint32_t; // not modifiable
@@ -152,6 +189,8 @@ namespace fpt {
         const uint32_t warp; // number of threads in a warp
         const uint32_t M; // M = #blocks
         const Dev &devAcc;
+
+    private:
         FreeDev frl; // free list, size = M*warp
         BufDev arr; // allocatable array blocks
 
@@ -164,8 +203,8 @@ namespace fpt {
             , frl( FreeDev{alpaka::allocBuf<uint32_t, Idx>(
                                     devAcc_, M * warp)} )
             , arr( BufDev{alpaka::allocBuf<A, Idx>(devAcc_, N)} ) {
-        // FIXME: kernel call to inialize frl (all 0, except last few
-        // cells when 32*warp doesn't divide N = 1)
+            // FIXME: kernel call to inialize frl (all 1, except last few
+            // cells when 32*warp doesn't divide N = 0)
         }
 
         // Create device-resident allocator class.
@@ -176,13 +215,13 @@ namespace fpt {
         }
 
         template <typename Queue>
-        void reinit(Queue &Q) {
-            auto K = initKernel();
+        void reinit(uint32_t N0, Queue &Q) {
+            auto K = initKernel(N0);
             alpaka::enqueue(Q, K);
         }
 
         // Kernel launch to (re)initialize free-list.
-        auto initKernel() {
+        auto initKernel(uint32_t N0) {
             // Launch with one warp per thread block:
             auto const gridBlockExtent = Vec::all(M);
             auto blockThreadExtent = Vec::all( alpaka::getWarpSize(devAcc) );
@@ -192,7 +231,7 @@ namespace fpt {
 
             // Create the kernel execution task.
             ClearAllocKernel K{};
-            return alpaka::createTaskKernel<Acc>(workDiv, K, N, alpaka::getPtrNative(frl));
+            return alpaka::createTaskKernel<Acc>(workDiv, K, N0, N, alpaka::getPtrNative(frl));
         }
     };
 
